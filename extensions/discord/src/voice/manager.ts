@@ -56,7 +56,6 @@ const CHANNELS = 2;
 const BIT_DEPTH = 16;
 const DEFAULT_MIN_SEGMENT_SECONDS = 0.5;
 const DEFAULT_CAPTURE_FINALIZE_GRACE_MS = 1_000;
-const DEFAULT_MAX_SEGMENT_DURATION_MS = 5_000;
 const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
 const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
@@ -301,7 +300,6 @@ export class DiscordVoiceManager {
   private readonly voiceEnabled: boolean;
   private readonly captureGraceMs: number;
   private readonly minSegmentSeconds: number;
-  private readonly maxSegmentDurationMs: number;
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom: string[];
   private readonly speakerContextCache = new Map<
@@ -332,8 +330,6 @@ export class DiscordVoiceManager {
       params.discordConfig.voice?.silenceGraceMs ?? DEFAULT_CAPTURE_FINALIZE_GRACE_MS;
     this.minSegmentSeconds =
       params.discordConfig.voice?.minSegmentSeconds ?? DEFAULT_MIN_SEGMENT_SECONDS;
-    this.maxSegmentDurationMs =
-      params.discordConfig.voice?.maxSegmentDurationMs ?? DEFAULT_MAX_SEGMENT_DURATION_MS;
     this.ownerAllowFrom =
       params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
   }
@@ -711,21 +707,7 @@ export class DiscordVoiceManager {
     let totalPcmBytes = 0;
     let opusFrameCount = 0;
     let decodeError = false;
-    let hardCutTriggered = false;
     const decodeStart = entry.profiler.startTimer();
-
-    const hardCutTimer = setTimeout(() => {
-      hardCutTriggered = true;
-      logVoiceVerbose(
-        `hard cut (${this.maxSegmentDurationMs}ms): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
-      );
-      entry.profiler.emitHardCut({
-        userId,
-        maxDurationMs: this.maxSegmentDurationMs,
-        pcmBytes: totalPcmBytes,
-      });
-      stream.destroy();
-    }, this.maxSegmentDurationMs);
 
     if (selected) {
       logVoiceVerbose(`opus decoder: ${selected.name}`);
@@ -757,8 +739,6 @@ export class DiscordVoiceManager {
         stream.on("close", resolve);
         stream.on("error", () => resolve());
       });
-
-      clearTimeout(hardCutTimer);
 
       if (selected) {
         releaseDecoder(selected.decoder);
@@ -812,7 +792,7 @@ export class DiscordVoiceManager {
       });
 
       logVoiceVerbose(
-        `capture ready (${durationSeconds.toFixed(2)}s, hardCut=${hardCutTriggered}): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
       entry.profiler.emitCapture({
         userId,
@@ -824,13 +804,7 @@ export class DiscordVoiceManager {
         await this.processSegment({ entry, wavBuffer, userId, durationSeconds });
       });
     } finally {
-      clearTimeout(hardCutTimer);
       finishVoiceCapture(entry.capture, userId, generation);
-      if (hardCutTriggered) {
-        void this.handleSpeakingStart(entry, userId).catch((err) => {
-          logger.warn(`discord voice: hard-cut re-capture failed: ${formatErrorMessage(err)}`);
-        });
-      }
     }
   }
 
