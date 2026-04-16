@@ -499,6 +499,7 @@ const DiscordVoiceSchema = z
     decryptionFailureTolerance: z.number().int().min(0).optional(),
     silenceGraceMs: z.number().int().min(50).max(5000).optional(),
     minSegmentSeconds: z.number().min(0.05).max(5).optional(),
+    maxSegmentDurationMs: z.number().int().min(500).max(30_000).optional(),
     tts: TtsConfigSchema.optional(),
   })
   .strict()

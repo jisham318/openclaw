@@ -136,6 +136,22 @@ export function createVoiceProfiler(ctx: VoiceProfileContext) {
       });
     },
 
+    emitHardCut(params: {
+      userId: string;
+      maxDurationMs: number;
+      pcmBytes: number;
+    }) {
+      emitDiagnosticEvent({
+        type: "voice.hard_cut",
+        channel: "discord",
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        userId: params.userId,
+        maxDurationMs: params.maxDurationMs,
+        pcmBytes: params.pcmBytes,
+      });
+    },
+
     emitDecode(params: {
       userId: string;
       startMs: number;

@@ -145,6 +145,14 @@ export type DiscordVoiceConfig = {
    * dropped as noise. Default: 0.35.
    */
   minSegmentSeconds?: number;
+  /**
+   * Hard cap (ms) on a single voice capture segment. When a speaker talks longer than this
+   * without a silence gap, the capture is force-cut, the accumulated audio is sent for
+   * transcription, and a new capture is started immediately so no audio is lost.
+   * Prevents runaway captures from producing multi-second latency spikes.
+   * Default: 3000.
+   */
+  maxSegmentDurationMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
