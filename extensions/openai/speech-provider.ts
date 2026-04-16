@@ -23,6 +23,7 @@ import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   openaiTTS,
+  openaiTTSStream,
 } from "./tts.js";
 
 const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
@@ -254,6 +255,36 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       });
       return {
         audioBuffer,
+        outputFormat: responseFormat,
+        fileExtension: responseFormatToFileExtension(responseFormat),
+        voiceCompatible: req.target === "voice-note" && responseFormat === "opus",
+      };
+    },
+    synthesizeStream: async (req) => {
+      const config = readOpenAIProviderConfig(req.providerConfig);
+      const overrides = readOpenAIOverrides(req.providerOverrides);
+      const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
+      if (!apiKey) {
+        throw new Error("OpenAI API key missing");
+      }
+      const responseFormat = resolveSpeechResponseFormat(
+        config.baseUrl,
+        req.target,
+        config.responseFormat,
+      );
+      const stream = await openaiTTSStream({
+        text: req.text,
+        apiKey,
+        baseUrl: config.baseUrl,
+        model: overrides.model ?? config.model,
+        voice: overrides.voice ?? config.voice,
+        speed: overrides.speed ?? config.speed,
+        instructions: config.instructions,
+        responseFormat,
+        timeoutMs: req.timeoutMs,
+      });
+      return {
+        stream,
         outputFormat: responseFormat,
         fileExtension: responseFormatToFileExtension(responseFormat),
         voiceCompatible: req.target === "voice-note" && responseFormat === "opus",

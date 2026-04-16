@@ -135,6 +135,19 @@ export type TtsSynthesisResult = {
   fileExtension?: string;
 };
 
+export type TtsSynthesisStreamResult = {
+  success: boolean;
+  stream?: import("node:stream").Readable;
+  error?: string;
+  provider?: string;
+  fallbackFrom?: string;
+  attemptedProviders?: string[];
+  attempts?: TtsProviderAttempt[];
+  outputFormat?: string;
+  voiceCompatible?: boolean;
+  fileExtension?: string;
+};
+
 export type TtsTelephonyResult = {
   success: boolean;
   audioBuffer?: Buffer;
@@ -152,6 +165,9 @@ export type TextToSpeech = (params: TtsRequestParams) => Promise<TtsResult>;
 export type TextToSpeechTelephony = (
   params: TtsTelephonyRequestParams,
 ) => Promise<TtsTelephonyResult>;
+export type SynthesizeSpeechStream = (
+  params: TtsRequestParams,
+) => Promise<TtsSynthesisStreamResult>;
 export type ListSpeechVoices = (params: ListSpeechVoicesParams) => Promise<SpeechVoiceOption[]>;
 
 export type TtsRuntimeFacade = {
@@ -186,6 +202,7 @@ export type TtsRuntimeFacade = {
   setTtsMaxLength: (prefsPath: string, maxLength: number) => void;
   setTtsProvider: (prefsPath: string, provider: TtsProvider) => void;
   synthesizeSpeech: (params: TtsRequestParams) => Promise<TtsSynthesisResult>;
+  synthesizeSpeechStream: SynthesizeSpeechStream;
   textToSpeech: TextToSpeech;
   textToSpeechTelephony: TextToSpeechTelephony;
 };

@@ -21,6 +21,7 @@ export {
   setTtsMaxLength,
   setTtsProvider,
   synthesizeSpeech,
+  synthesizeSpeechStream,
   textToSpeech,
   textToSpeechTelephony,
   _test,
@@ -30,5 +31,6 @@ export {
   type TtsDirectiveParseResult,
   type TtsResult,
   type TtsSynthesisResult,
+  type TtsSynthesisStreamResult,
   type TtsTelephonyResult,
 } from "./src/tts.js";

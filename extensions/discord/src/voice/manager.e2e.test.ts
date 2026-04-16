@@ -1,6 +1,7 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVoiceCaptureState } from "./capture-state.js";
+import { createVoiceProfiler } from "./profiling.js";
 import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 const {
@@ -12,6 +13,7 @@ const {
   agentCommandMock,
   transcribeAudioFileMock,
   textToSpeechMock,
+  synthesizeSpeechStreamMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -100,6 +102,7 @@ const {
     agentCommandMock: vi.fn(async (_opts?: unknown, _runtime?: unknown) => ({ payloads: [] })),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
+    synthesizeSpeechStreamMock: vi.fn(async () => ({ success: false })),
   };
 });
 
@@ -142,6 +145,10 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", () => ({
+  emitDiagnosticEvent: vi.fn(),
+}));
+
 vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
     mediaUnderstanding: {
@@ -149,6 +156,7 @@ vi.mock("../runtime.js", () => ({
     },
     tts: {
       textToSpeech: textToSpeechMock,
+      synthesizeSpeechStream: synthesizeSpeechStreamMock,
     },
   }),
 }));
@@ -201,6 +209,8 @@ describe("DiscordVoiceManager", () => {
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
     textToSpeechMock.mockReset();
     textToSpeechMock.mockResolvedValue({ success: true, audioPath: "/tmp/voice.mp3" });
+    synthesizeSpeechStreamMock.mockReset();
+    synthesizeSpeechStreamMock.mockResolvedValue({ success: false });
   });
 
   const createManager = (
@@ -267,6 +277,7 @@ describe("DiscordVoiceManager", () => {
         processingQueues: new Map(),
         capture: createVoiceCaptureState(),
         receiveRecovery: createVoiceReceiveRecoveryState(),
+        profiler: createVoiceProfiler({ guildId: "g1", channelId: "1001" }),
       },
       wavBuffer: Buffer.from("RIFF"),
       userId,

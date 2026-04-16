@@ -950,7 +950,58 @@ export class DiscordVoiceManager {
     }
 
     const ttsStart = entry.profiler.startTimer();
-    const ttsResult = await getDiscordRuntime().tts.textToSpeech({
+    const runtime = getDiscordRuntime();
+
+    const streamResult = await runtime.tts.synthesizeSpeechStream({
+      text: speakText,
+      cfg: ttsCfg,
+      channel: "discord",
+      overrides: directive.overrides,
+    });
+
+    if (streamResult.success && streamResult.stream) {
+      entry.profiler.emitTts({
+        startMs: ttsStart,
+        inputChars: speakText.length,
+        outcome: "ok",
+      });
+      logVoiceVerbose(
+        `tts stream ok (${speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
+      );
+
+      entry.profiler.emitSegment({
+        userId,
+        startMs: segmentStart,
+        audioDurationSeconds: durationSeconds,
+        outcome: "replied",
+        stage: "complete",
+      });
+
+      const audioStream = streamResult.stream;
+      this.enqueuePlayback(entry, async () => {
+        const playbackStart = entry.profiler.startTimer();
+        logVoiceVerbose(
+          `playback start (streaming): guild ${entry.guildId} channel ${entry.channelId}`,
+        );
+        const voiceSdk = loadDiscordVoiceSdk();
+        const resource = voiceSdk.createAudioResource(audioStream);
+        entry.player.play(resource);
+        await voiceSdk
+          .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+          .catch(() => undefined);
+        await voiceSdk
+          .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
+          .catch(() => undefined);
+        entry.profiler.emitPlayback({ startMs: playbackStart });
+        logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+      });
+      return;
+    }
+
+    logVoiceVerbose(
+      `tts stream unavailable, falling back to buffered: guild ${entry.guildId} channel ${entry.channelId}`,
+    );
+    const ttsResult = await runtime.tts.textToSpeech({
       text: speakText,
       cfg: ttsCfg,
       channel: "discord",

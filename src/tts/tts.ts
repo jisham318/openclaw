@@ -22,6 +22,7 @@ export {
   setTtsMaxLength,
   setTtsProvider,
   synthesizeSpeech,
+  synthesizeSpeechStream,
   textToSpeech,
   textToSpeechTelephony,
   type ResolvedTtsConfig,
@@ -30,5 +31,6 @@ export {
   type TtsDirectiveParseResult,
   type TtsResult,
   type TtsSynthesisResult,
+  type TtsSynthesisStreamResult,
   type TtsTelephonyResult,
 } from "../plugin-sdk/tts-runtime.js";

@@ -7,6 +7,7 @@ import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type {
   ListSpeechVoices,
+  SynthesizeSpeechStream,
   TextToSpeech,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
@@ -95,6 +96,7 @@ export type PluginRuntimeCore = {
   tts: {
     textToSpeech: TextToSpeech;
     textToSpeechTelephony: TextToSpeechTelephony;
+    synthesizeSpeechStream: SynthesizeSpeechStream;
     listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {

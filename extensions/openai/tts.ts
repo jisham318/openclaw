@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
@@ -183,4 +184,95 @@ export async function openaiTTS(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function openaiTTSStream(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  voice: string;
+  speed?: number;
+  instructions?: string;
+  responseFormat: "mp3" | "opus" | "pcm" | "wav";
+  timeoutMs: number;
+}): Promise<Readable> {
+  const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
+    params;
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions);
+
+  if (!isValidOpenAIModel(model, baseUrl)) {
+    throw new Error(`Invalid model: ${model}`);
+  }
+  if (!isValidOpenAIVoice(voice, baseUrl)) {
+    throw new Error(`Invalid voice: ${voice}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const requestHeaders = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  const requestBody = JSON.stringify({
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+    ...(speed != null && { speed }),
+    ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/audio/speech`, {
+      method: "POST",
+      headers: requestHeaders,
+      body: requestBody,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+
+  if (!isDebugProxyGlobalFetchPatchInstalled()) {
+    captureHttpExchange({
+      url: `${baseUrl}/audio/speech`,
+      method: "POST",
+      requestHeaders,
+      requestBody,
+      response,
+      transport: "http",
+      meta: {
+        provider: "openai",
+        capability: "tts",
+      },
+    });
+  }
+
+  if (!response.ok) {
+    clearTimeout(timeout);
+    const detail = await extractOpenAiErrorDetail(response);
+    const requestId =
+      trimToUndefined(response.headers.get("x-request-id")) ??
+      trimToUndefined(response.headers.get("request-id"));
+    throw new Error(
+      `OpenAI TTS API error (${response.status})` +
+        (detail ? `: ${detail}` : "") +
+        (requestId ? ` [request_id=${requestId}]` : ""),
+    );
+  }
+
+  if (!response.body) {
+    clearTimeout(timeout);
+    throw new Error("OpenAI TTS API returned no response body");
+  }
+
+  const nodeStream = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
+  nodeStream.on("end", () => clearTimeout(timeout));
+  nodeStream.on("error", () => clearTimeout(timeout));
+  nodeStream.on("close", () => clearTimeout(timeout));
+  return nodeStream;
 }

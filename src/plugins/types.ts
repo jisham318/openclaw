@@ -60,6 +60,7 @@ import type {
   SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisResult,
+  SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisRequest,
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
@@ -1582,6 +1583,8 @@ export type SpeechProviderPlugin = {
   ) => SpeechProviderConfig | undefined;
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
+  /** Optional streaming synthesis — returns a Readable stream instead of a full buffer. */
+  synthesizeStream?: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisStreamResult>;
   synthesizeTelephony?: (
     req: SpeechTelephonySynthesisRequest,
   ) => Promise<SpeechTelephonySynthesisResult>;

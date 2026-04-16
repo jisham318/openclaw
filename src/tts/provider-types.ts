@@ -56,6 +56,13 @@ export type SpeechSynthesisResult = {
   voiceCompatible: boolean;
 };
 
+export type SpeechSynthesisStreamResult = {
+  stream: import("node:stream").Readable;
+  outputFormat: string;
+  fileExtension: string;
+  voiceCompatible: boolean;
+};
+
 export type SpeechTelephonySynthesisRequest = {
   text: string;
   cfg: OpenClawConfig;

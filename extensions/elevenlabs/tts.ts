@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import {
   asObject,
   normalizeApplyTextNormalization,
@@ -154,4 +155,110 @@ export async function elevenLabsTTS(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function elevenLabsTTSStream(params: {
+  text: string;
+  apiKey: string;
+  baseUrl: string;
+  voiceId: string;
+  modelId: string;
+  outputFormat: string;
+  seed?: number;
+  applyTextNormalization?: "auto" | "on" | "off";
+  languageCode?: string;
+  latencyTier?: number;
+  voiceSettings: {
+    stability: number;
+    similarityBoost: number;
+    style: number;
+    useSpeakerBoost: boolean;
+    speed: number;
+  };
+  timeoutMs: number;
+}): Promise<Readable> {
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    voiceId,
+    modelId,
+    outputFormat,
+    seed,
+    applyTextNormalization,
+    languageCode,
+    latencyTier,
+    voiceSettings,
+    timeoutMs,
+  } = params;
+  if (!isValidElevenLabsVoiceId(voiceId)) {
+    throw new Error("Invalid voiceId format");
+  }
+  assertElevenLabsVoiceSettings(voiceSettings);
+  const normalizedLanguage = normalizeLanguageCode(languageCode);
+  const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
+  const normalizedSeed = normalizeSeed(seed);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const url = new URL(`${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`);
+  if (outputFormat) {
+    url.searchParams.set("output_format", outputFormat);
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: modelId,
+        seed: normalizedSeed,
+        apply_text_normalization: normalizedNormalization,
+        language_code: normalizedLanguage,
+        latency_optimization_level: latencyTier,
+        voice_settings: {
+          stability: voiceSettings.stability,
+          similarity_boost: voiceSettings.similarityBoost,
+          style: voiceSettings.style,
+          use_speaker_boost: voiceSettings.useSpeakerBoost,
+          speed: voiceSettings.speed,
+        },
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+
+  if (!response.ok) {
+    clearTimeout(timeout);
+    const detail = await extractElevenLabsErrorDetail(response);
+    const requestId =
+      trimToUndefined(response.headers.get("x-request-id")) ??
+      trimToUndefined(response.headers.get("request-id"));
+    throw new Error(
+      `ElevenLabs API error (${response.status})` +
+        (detail ? `: ${detail}` : "") +
+        (requestId ? ` [request_id=${requestId}]` : ""),
+    );
+  }
+
+  if (!response.body) {
+    clearTimeout(timeout);
+    throw new Error("ElevenLabs API returned no response body");
+  }
+
+  const nodeStream = Readable.fromWeb(response.body as import("node:stream/web").ReadableStream);
+  nodeStream.on("end", () => clearTimeout(timeout));
+  nodeStream.on("error", () => clearTimeout(timeout));
+  nodeStream.on("close", () => clearTimeout(timeout));
+  return nodeStream;
 }

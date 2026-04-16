@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import { randomBytes } from "node:crypto";
 import {
   existsSync,
@@ -107,6 +108,19 @@ export type TtsSynthesisResult = {
   audioBuffer?: Buffer;
   error?: string;
   latencyMs?: number;
+  provider?: string;
+  fallbackFrom?: string;
+  attemptedProviders?: string[];
+  attempts?: TtsProviderAttempt[];
+  outputFormat?: string;
+  voiceCompatible?: boolean;
+  fileExtension?: string;
+};
+
+export type TtsSynthesisStreamResult = {
+  success: boolean;
+  stream?: Readable;
+  error?: string;
   provider?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -879,6 +893,120 @@ export async function synthesizeSpeech(params: {
         );
       } else {
         logVerbose(`TTS: ${provider} failed (${rawError}); trying next provider.`);
+      }
+    }
+  }
+
+  return buildTtsFailureResult(errors, attemptedProviders, attempts);
+}
+
+export async function synthesizeSpeechStream(params: {
+  text: string;
+  cfg: OpenClawConfig;
+  prefsPath?: string;
+  channel?: string;
+  overrides?: TtsDirectiveOverrides;
+  disableFallback?: boolean;
+}): Promise<TtsSynthesisStreamResult> {
+  const setup = resolveTtsRequestSetup({
+    text: params.text,
+    cfg: params.cfg,
+    prefsPath: params.prefsPath,
+    providerOverride: params.overrides?.provider,
+    disableFallback: params.disableFallback,
+  });
+  if ("error" in setup) {
+    return { success: false, error: setup.error };
+  }
+
+  const { config, providers } = setup;
+  const target = supportsNativeVoiceNoteTts(params.channel) ? "voice-note" : "audio-file";
+
+  const errors: string[] = [];
+  const attemptedProviders: string[] = [];
+  const attempts: TtsProviderAttempt[] = [];
+  const primaryProvider = providers[0];
+  logVerbose(
+    `TTS stream: starting with provider ${primaryProvider}, fallbacks: ${providers.slice(1).join(", ") || "none"}`,
+  );
+
+  for (const provider of providers) {
+    attemptedProviders.push(provider);
+    const providerStart = Date.now();
+    try {
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg: params.cfg,
+        config,
+      });
+      if (resolvedProvider.kind === "skip") {
+        errors.push(resolvedProvider.message);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: resolvedProvider.reasonCode,
+          error: resolvedProvider.message,
+        });
+        logVerbose(`TTS stream: provider ${provider} skipped (${resolvedProvider.message})`);
+        continue;
+      }
+      if (!resolvedProvider.provider.synthesizeStream) {
+        errors.push(`${provider}: streaming not supported`);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: "not_configured",
+          error: `${provider}: streaming not supported`,
+        });
+        logVerbose(`TTS stream: provider ${provider} does not support streaming`);
+        continue;
+      }
+      const synthesis = await resolvedProvider.provider.synthesizeStream({
+        text: params.text,
+        cfg: params.cfg,
+        providerConfig: resolvedProvider.providerConfig,
+        target,
+        providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
+        timeoutMs: config.timeoutMs,
+      });
+      const latencyMs = Date.now() - providerStart;
+      attempts.push({
+        provider,
+        outcome: "success",
+        reasonCode: "success",
+        latencyMs,
+      });
+      return {
+        success: true,
+        stream: synthesis.stream,
+        provider,
+        fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
+        attemptedProviders,
+        attempts,
+        outputFormat: synthesis.outputFormat,
+        voiceCompatible: synthesis.voiceCompatible,
+        fileExtension: synthesis.fileExtension,
+      };
+    } catch (err) {
+      const errorMsg = formatTtsProviderError(provider, err);
+      const latencyMs = Date.now() - providerStart;
+      errors.push(errorMsg);
+      attempts.push({
+        provider,
+        outcome: "failed",
+        reasonCode:
+          err instanceof Error && err.name === "AbortError" ? "timeout" : "provider_error",
+        latencyMs,
+        error: errorMsg,
+      });
+      const rawError = sanitizeTtsErrorForLog(err);
+      if (provider === primaryProvider) {
+        const hasFallbacks = providers.length > 1;
+        logVerbose(
+          `TTS stream: primary provider ${provider} failed (${rawError})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
+        );
+      } else {
+        logVerbose(`TTS stream: ${provider} failed (${rawError}); trying next provider.`);
       }
     }
   }

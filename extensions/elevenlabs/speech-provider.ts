@@ -20,7 +20,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
-import { elevenLabsTTS } from "./tts.js";
+import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
@@ -495,6 +495,62 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       });
       return {
         audioBuffer,
+        outputFormat,
+        fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
+        voiceCompatible: req.target === "voice-note",
+      };
+    },
+    synthesizeStream: async (req) => {
+      const config = readElevenLabsProviderConfig(req.providerConfig);
+      const overrides = req.providerOverrides ?? {};
+      const apiKey =
+        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+      if (!apiKey) {
+        throw new Error("ElevenLabs API key missing");
+      }
+      const outputFormat =
+        trimToUndefined(overrides.outputFormat) ??
+        (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
+      const overrideVoiceSettings = asObject(overrides.voiceSettings);
+      const latencyTier = asFiniteNumber(overrides.latencyTier);
+      const stream = await elevenLabsTTSStream({
+        text: req.text,
+        apiKey,
+        baseUrl: config.baseUrl,
+        voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
+        modelId: trimToUndefined(overrides.modelId) ?? config.modelId,
+        outputFormat,
+        seed: asFiniteNumber(overrides.seed) ?? config.seed,
+        applyTextNormalization:
+          (trimToUndefined(overrides.applyTextNormalization) as
+            | "auto"
+            | "on"
+            | "off"
+            | undefined) ?? config.applyTextNormalization,
+        languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
+        latencyTier,
+        voiceSettings: {
+          ...config.voiceSettings,
+          ...(asFiniteNumber(overrideVoiceSettings?.stability) == null
+            ? {}
+            : { stability: asFiniteNumber(overrideVoiceSettings?.stability) }),
+          ...(asFiniteNumber(overrideVoiceSettings?.similarityBoost) == null
+            ? {}
+            : { similarityBoost: asFiniteNumber(overrideVoiceSettings?.similarityBoost) }),
+          ...(asFiniteNumber(overrideVoiceSettings?.style) == null
+            ? {}
+            : { style: asFiniteNumber(overrideVoiceSettings?.style) }),
+          ...(asBoolean(overrideVoiceSettings?.useSpeakerBoost) == null
+            ? {}
+            : { useSpeakerBoost: asBoolean(overrideVoiceSettings?.useSpeakerBoost) }),
+          ...(asFiniteNumber(overrideVoiceSettings?.speed) == null
+            ? {}
+            : { speed: asFiniteNumber(overrideVoiceSettings?.speed) }),
+        },
+        timeoutMs: req.timeoutMs,
+      });
+      return {
+        stream,
         outputFormat,
         fileExtension: req.target === "voice-note" ? ".opus" : ".mp3",
         voiceCompatible: req.target === "voice-note",

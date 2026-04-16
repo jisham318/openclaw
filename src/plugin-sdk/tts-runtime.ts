@@ -10,6 +10,7 @@ import type {
   TtsResult,
   TtsRuntimeFacade,
   TtsSynthesisResult,
+  TtsSynthesisStreamResult,
   TtsTelephonyResult,
 } from "./tts-runtime.types.js";
 
@@ -69,6 +70,8 @@ export const setTtsProvider: FacadeModule["setTtsProvider"] =
   createLazyFacadeValue("setTtsProvider");
 export const synthesizeSpeech: FacadeModule["synthesizeSpeech"] =
   createLazyFacadeValue("synthesizeSpeech");
+export const synthesizeSpeechStream: FacadeModule["synthesizeSpeechStream"] =
+  createLazyFacadeValue("synthesizeSpeechStream");
 export const textToSpeech: FacadeModule["textToSpeech"] = createLazyFacadeValue("textToSpeech");
 export const textToSpeechTelephony: FacadeModule["textToSpeechTelephony"] =
   createLazyFacadeValue("textToSpeechTelephony");
@@ -80,6 +83,7 @@ export type {
   TtsDirectiveParseResult,
   TtsResult,
   TtsSynthesisResult,
+  TtsSynthesisStreamResult,
   TtsTelephonyResult,
 } from "./tts-runtime.types.js";
 
