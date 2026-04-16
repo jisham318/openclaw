@@ -34,6 +34,7 @@ import {
   stopVoiceCaptureState,
   type VoiceCaptureState,
 } from "./capture-state.js";
+import { createVoiceProfiler, type VoiceProfiler } from "./profiling.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import {
   analyzeVoiceReceiveError,
@@ -54,8 +55,8 @@ const require = createRequire(import.meta.url);
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
-const MIN_SEGMENT_SECONDS = 0.35;
-const CAPTURE_FINALIZE_GRACE_MS = 1_200;
+const DEFAULT_MIN_SEGMENT_SECONDS = 0.35;
+const DEFAULT_CAPTURE_FINALIZE_GRACE_MS = 400;
 const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
 const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
@@ -87,6 +88,7 @@ type VoiceSessionEntry = {
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
   receiveRecovery: VoiceReceiveRecoveryState;
+  profiler: VoiceProfiler;
   stop: () => void;
 };
 
@@ -308,6 +310,8 @@ export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
   private botUserId?: string;
   private readonly voiceEnabled: boolean;
+  private readonly captureGraceMs: number;
+  private readonly minSegmentSeconds: number;
   private autoJoinTask: Promise<void> | null = null;
   private readonly ownerAllowFrom: string[];
   private readonly speakerContextCache = new Map<
@@ -334,6 +338,10 @@ export class DiscordVoiceManager {
   ) {
     this.botUserId = params.botUserId;
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
+    this.captureGraceMs =
+      params.discordConfig.voice?.silenceGraceMs ?? DEFAULT_CAPTURE_FINALIZE_GRACE_MS;
+    this.minSegmentSeconds =
+      params.discordConfig.voice?.minSegmentSeconds ?? DEFAULT_MIN_SEGMENT_SECONDS;
     this.ownerAllowFrom =
       params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
   }
@@ -405,10 +413,13 @@ export class DiscordVoiceManager {
       return { ok: false, message: "Missing guildId or channelId." };
     }
     logVoiceVerbose(`join requested: guild ${guildId} channel ${channelId}`);
+    const joinProfiler = createVoiceProfiler({ guildId, channelId });
+    const joinStart = joinProfiler.startTimer();
 
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
       logVoiceVerbose(`join: already connected to guild ${guildId} channel ${channelId}`);
+      joinProfiler.emitJoin({ startMs: joinStart, outcome: "already_connected" });
       return {
         ok: true,
         message: `Already connected to ${formatMention({ channelId })}.`,
@@ -463,6 +474,11 @@ export class DiscordVoiceManager {
       logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
     } catch (err) {
       connection.destroy();
+      joinProfiler.emitJoin({
+        startMs: joinStart,
+        outcome: "error",
+        error: formatErrorMessage(err),
+      });
       return { ok: false, message: `Failed to join voice channel: ${formatErrorMessage(err)}` };
     }
 
@@ -519,6 +535,7 @@ export class DiscordVoiceManager {
       processingQueue: Promise.resolve(),
       capture: createVoiceCaptureState(),
       receiveRecovery: createVoiceReceiveRecoveryState(),
+      profiler: joinProfiler,
       stop: () => {
         if (speakingHandler) {
           connection.receiver.speaking.off("start", speakingHandler);
@@ -580,6 +597,7 @@ export class DiscordVoiceManager {
     player.on("error", playerErrorHandler);
 
     this.sessions.set(guildId, entry);
+    joinProfiler.emitJoin({ startMs: joinStart, outcome: "connected" });
     return {
       ok: true,
       message: `Joined ${formatMention({ channelId })}.`,
@@ -601,6 +619,7 @@ export class DiscordVoiceManager {
     entry.stop();
     this.sessions.delete(guildId);
     logVoiceVerbose(`leave: disconnected from guild ${guildId} channel ${entry.channelId}`);
+    entry.profiler.emitLeave();
     return {
       ok: true,
       message: `Left ${formatMention({ channelId: entry.channelId })}.`,
@@ -636,10 +655,10 @@ export class DiscordVoiceManager {
     scheduleVoiceCaptureFinalize({
       state: entry.capture,
       userId,
-      delayMs: CAPTURE_FINALIZE_GRACE_MS,
+      delayMs: this.captureGraceMs,
       onFinalize: () => {
         logVoiceVerbose(
-          `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
+          `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${this.captureGraceMs}ms`,
         );
       },
     });
@@ -666,6 +685,7 @@ export class DiscordVoiceManager {
     logVoiceVerbose(
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
+    const captureStart = entry.profiler.startTimer();
     const voiceSdk = loadDiscordVoiceSdk();
     this.enableDaveReceivePassthrough(
       entry,
@@ -694,20 +714,38 @@ export class DiscordVoiceManager {
         logVoiceVerbose(
           `capture empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
         );
+        entry.profiler.emitCapture({
+          userId,
+          startMs: captureStart,
+          audioDurationSeconds: 0,
+          outcome: "empty",
+        });
         return;
       }
       this.resetDecryptFailureState(entry);
       const { path: wavPath, durationSeconds } = await writeWavFile(pcm);
-      const minimumDurationSeconds = streamAborted ? 0.2 : MIN_SEGMENT_SECONDS;
+      const minimumDurationSeconds = streamAborted ? 0.2 : this.minSegmentSeconds;
       if (durationSeconds < minimumDurationSeconds) {
         logVoiceVerbose(
           `capture too short (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
         );
+        entry.profiler.emitCapture({
+          userId,
+          startMs: captureStart,
+          audioDurationSeconds: durationSeconds,
+          outcome: "too_short",
+        });
         return;
       }
       logVoiceVerbose(
         `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
+      entry.profiler.emitCapture({
+        userId,
+        startMs: captureStart,
+        audioDurationSeconds: durationSeconds,
+        outcome: "ready",
+      });
       this.enqueueProcessing(entry, async () => {
         await this.processSegment({ entry, wavPath, userId, durationSeconds });
       });
@@ -723,6 +761,7 @@ export class DiscordVoiceManager {
     durationSeconds: number;
   }) {
     const { entry, wavPath, userId, durationSeconds } = params;
+    const segmentStart = entry.profiler.startTimer();
     logVoiceVerbose(
       `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
     );
@@ -754,8 +793,16 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `segment unauthorized: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${access.message}`,
       );
+      entry.profiler.emitSegment({
+        userId,
+        startMs: segmentStart,
+        audioDurationSeconds: durationSeconds,
+        outcome: "unauthorized",
+        stage: "authorize",
+      });
       return;
     }
+    const transcribeStart = entry.profiler.startTimer();
     const transcript = await transcribeAudio({
       cfg: this.params.cfg,
       agentId: entry.route.agentId,
@@ -765,8 +812,25 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `transcription empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
+      entry.profiler.emitTranscribe({
+        startMs: transcribeStart,
+        transcriptChars: 0,
+        outcome: "empty",
+      });
+      entry.profiler.emitSegment({
+        userId,
+        startMs: segmentStart,
+        audioDurationSeconds: durationSeconds,
+        outcome: "transcription_empty",
+        stage: "transcribe",
+      });
       return;
     }
+    entry.profiler.emitTranscribe({
+      startMs: transcribeStart,
+      transcriptChars: transcript.length,
+      outcome: "ok",
+    });
     logVoiceVerbose(
       `transcription ok (${transcript.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
@@ -796,6 +860,13 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `reply empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
+      entry.profiler.emitSegment({
+        userId,
+        startMs: segmentStart,
+        audioDurationSeconds: durationSeconds,
+        outcome: "empty_reply",
+        stage: "agent",
+      });
       return;
     }
     logVoiceVerbose(
@@ -816,9 +887,15 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `tts skipped (empty): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
+      entry.profiler.emitTts({
+        startMs: segmentStart,
+        inputChars: 0,
+        outcome: "skipped",
+      });
       return;
     }
 
+    const ttsStart = entry.profiler.startTimer();
     const ttsResult = await getDiscordRuntime().tts.textToSpeech({
       text: speakText,
       cfg: ttsCfg,
@@ -827,14 +904,34 @@ export class DiscordVoiceManager {
     });
     if (!ttsResult.success || !ttsResult.audioPath) {
       logger.warn(`discord voice: TTS failed: ${ttsResult.error ?? "unknown error"}`);
+      entry.profiler.emitTts({
+        startMs: ttsStart,
+        inputChars: speakText.length,
+        outcome: "error",
+        error: ttsResult.error ?? "unknown error",
+      });
       return;
     }
+    entry.profiler.emitTts({
+      startMs: ttsStart,
+      inputChars: speakText.length,
+      outcome: "ok",
+    });
     const audioPath = ttsResult.audioPath;
     logVoiceVerbose(
       `tts ok (${speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
+    entry.profiler.emitSegment({
+      userId,
+      startMs: segmentStart,
+      audioDurationSeconds: durationSeconds,
+      outcome: "replied",
+      stage: "complete",
+    });
+
     this.enqueuePlayback(entry, async () => {
+      const playbackStart = entry.profiler.startTimer();
       logVoiceVerbose(
         `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(audioPath)}`,
       );
@@ -847,6 +944,7 @@ export class DiscordVoiceManager {
       await voiceSdk
         .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
         .catch(() => undefined);
+      entry.profiler.emitPlayback({ startMs: playbackStart });
       logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
     });
   }
@@ -854,6 +952,11 @@ export class DiscordVoiceManager {
   private handleReceiveError(entry: VoiceSessionEntry, err: unknown) {
     const analysis = analyzeVoiceReceiveError(err);
     logger.warn(`discord voice: receive error: ${analysis.message}`);
+    entry.profiler.emitError({
+      errorKind: analysis.countsAsDecryptFailure ? "decrypt" : "receive",
+      message: analysis.message,
+      isRecoverable: analysis.shouldAttemptPassthrough || analysis.countsAsDecryptFailure,
+    });
     if (analysis.shouldAttemptPassthrough) {
       this.enableDaveReceivePassthrough(
         entry,

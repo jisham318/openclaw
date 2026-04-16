@@ -152,6 +152,85 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticVoiceJoinEvent = DiagnosticBaseEvent & {
+  type: "voice.join";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  durationMs: number;
+  outcome: "connected" | "already_connected" | "error";
+  error?: string;
+};
+
+export type DiagnosticVoiceLeaveEvent = DiagnosticBaseEvent & {
+  type: "voice.leave";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+};
+
+export type DiagnosticVoiceCaptureEvent = DiagnosticBaseEvent & {
+  type: "voice.capture";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  userId: string;
+  durationMs: number;
+  audioDurationSeconds: number;
+  outcome: "ready" | "empty" | "too_short";
+};
+
+export type DiagnosticVoiceTranscribeEvent = DiagnosticBaseEvent & {
+  type: "voice.transcribe";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  durationMs: number;
+  transcriptChars: number;
+  outcome: "ok" | "empty";
+};
+
+export type DiagnosticVoiceSegmentEvent = DiagnosticBaseEvent & {
+  type: "voice.segment";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  userId: string;
+  durationMs: number;
+  audioDurationSeconds: number;
+  outcome: "replied" | "empty_reply" | "unauthorized" | "transcription_empty";
+  stage: "authorize" | "transcribe" | "agent" | "tts" | "complete";
+};
+
+export type DiagnosticVoiceTtsEvent = DiagnosticBaseEvent & {
+  type: "voice.tts";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  durationMs: number;
+  inputChars: number;
+  outcome: "ok" | "error" | "skipped";
+  error?: string;
+};
+
+export type DiagnosticVoicePlaybackEvent = DiagnosticBaseEvent & {
+  type: "voice.playback";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  durationMs: number;
+};
+
+export type DiagnosticVoiceErrorEvent = DiagnosticBaseEvent & {
+  type: "voice.error";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  errorKind: "receive" | "decrypt" | "playback" | "connection";
+  message: string;
+  isRecoverable: boolean;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -165,7 +244,15 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticVoiceJoinEvent
+  | DiagnosticVoiceLeaveEvent
+  | DiagnosticVoiceCaptureEvent
+  | DiagnosticVoiceTranscribeEvent
+  | DiagnosticVoiceSegmentEvent
+  | DiagnosticVoiceTtsEvent
+  | DiagnosticVoicePlaybackEvent
+  | DiagnosticVoiceErrorEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

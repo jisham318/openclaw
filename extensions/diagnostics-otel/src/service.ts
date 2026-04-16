@@ -233,6 +233,51 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         description: "Run attempts",
       });
 
+      const voiceJoinCounter = meter.createCounter("openclaw.voice.join", {
+        unit: "1",
+        description: "Voice channel join attempts",
+      });
+      const voiceJoinDurationHistogram = meter.createHistogram("openclaw.voice.join.duration_ms", {
+        unit: "ms",
+        description: "Voice channel join duration",
+      });
+      const voiceCaptureCounter = meter.createCounter("openclaw.voice.capture", {
+        unit: "1",
+        description: "Voice audio capture events",
+      });
+      const voiceCaptureDurationHistogram = meter.createHistogram(
+        "openclaw.voice.capture.duration_ms",
+        { unit: "ms", description: "Voice audio capture processing duration" },
+      );
+      const voiceAudioDurationHistogram = meter.createHistogram(
+        "openclaw.voice.audio_duration_s",
+        { unit: "s", description: "Captured audio segment duration" },
+      );
+      const voiceTranscribeDurationHistogram = meter.createHistogram(
+        "openclaw.voice.transcribe.duration_ms",
+        { unit: "ms", description: "Voice transcription duration" },
+      );
+      const voiceSegmentCounter = meter.createCounter("openclaw.voice.segment", {
+        unit: "1",
+        description: "Voice segment processing events",
+      });
+      const voiceSegmentDurationHistogram = meter.createHistogram(
+        "openclaw.voice.segment.duration_ms",
+        { unit: "ms", description: "Full voice segment pipeline duration" },
+      );
+      const voiceTtsDurationHistogram = meter.createHistogram("openclaw.voice.tts.duration_ms", {
+        unit: "ms",
+        description: "Voice TTS generation duration",
+      });
+      const voicePlaybackDurationHistogram = meter.createHistogram(
+        "openclaw.voice.playback.duration_ms",
+        { unit: "ms", description: "Voice audio playback duration" },
+      );
+      const voiceErrorCounter = meter.createCounter("openclaw.voice.error", {
+        unit: "1",
+        description: "Voice channel errors",
+      });
+
       if (logsEnabled) {
         const logExporter = new OTLPLogExporter({
           ...(logUrl ? { url: logUrl } : {}),
@@ -609,6 +654,144 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         queueDepthHistogram.record(evt.queued, { "openclaw.channel": "heartbeat" });
       };
 
+      const voiceAttrs = (evt: { channel: string; guildId: string; channelId: string }) => ({
+        "openclaw.channel": evt.channel,
+        "openclaw.guildId": evt.guildId,
+        "openclaw.channelId": evt.channelId,
+      });
+
+      const recordVoiceJoin = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.join" }>,
+      ) => {
+        const attrs = { ...voiceAttrs(evt), "openclaw.outcome": evt.outcome };
+        voiceJoinCounter.add(1, attrs);
+        voiceJoinDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = spanWithDuration("openclaw.voice.join", attrs, evt.durationMs);
+        if (evt.outcome === "error" && evt.error) {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: evt.error });
+        }
+        span.end();
+      };
+
+      const recordVoiceLeave = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.leave" }>,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = tracer.startSpan("openclaw.voice.leave", { attributes: voiceAttrs(evt) });
+        span.end();
+      };
+
+      const recordVoiceCapture = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.capture" }>,
+      ) => {
+        const attrs = { ...voiceAttrs(evt), "openclaw.outcome": evt.outcome };
+        voiceCaptureCounter.add(1, attrs);
+        voiceCaptureDurationHistogram.record(evt.durationMs, attrs);
+        if (evt.audioDurationSeconds > 0) {
+          voiceAudioDurationHistogram.record(evt.audioDurationSeconds, attrs);
+        }
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.userId": evt.userId,
+          "openclaw.audioDurationSeconds": evt.audioDurationSeconds,
+        };
+        const span = spanWithDuration("openclaw.voice.capture", spanAttrs, evt.durationMs);
+        span.end();
+      };
+
+      const recordVoiceTranscribe = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.transcribe" }>,
+      ) => {
+        const attrs = { ...voiceAttrs(evt), "openclaw.outcome": evt.outcome };
+        voiceTranscribeDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.transcriptChars": evt.transcriptChars,
+        };
+        const span = spanWithDuration("openclaw.voice.transcribe", spanAttrs, evt.durationMs);
+        span.end();
+      };
+
+      const recordVoiceSegment = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.segment" }>,
+      ) => {
+        const attrs = {
+          ...voiceAttrs(evt),
+          "openclaw.outcome": evt.outcome,
+          "openclaw.stage": evt.stage,
+        };
+        voiceSegmentCounter.add(1, attrs);
+        voiceSegmentDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.userId": evt.userId,
+          "openclaw.audioDurationSeconds": evt.audioDurationSeconds,
+        };
+        const span = spanWithDuration("openclaw.voice.segment", spanAttrs, evt.durationMs);
+        span.end();
+      };
+
+      const recordVoiceTts = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.tts" }>,
+      ) => {
+        const attrs = { ...voiceAttrs(evt), "openclaw.outcome": evt.outcome };
+        voiceTtsDurationHistogram.record(evt.durationMs, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number> = {
+          ...attrs,
+          "openclaw.inputChars": evt.inputChars,
+        };
+        const span = spanWithDuration("openclaw.voice.tts", spanAttrs, evt.durationMs);
+        if (evt.outcome === "error" && evt.error) {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: evt.error });
+        }
+        span.end();
+      };
+
+      const recordVoicePlayback = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.playback" }>,
+      ) => {
+        voicePlaybackDurationHistogram.record(evt.durationMs, voiceAttrs(evt));
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = spanWithDuration(
+          "openclaw.voice.playback",
+          voiceAttrs(evt),
+          evt.durationMs,
+        );
+        span.end();
+      };
+
+      const recordVoiceError = (
+        evt: Extract<DiagnosticEventPayload, { type: "voice.error" }>,
+      ) => {
+        const attrs = { ...voiceAttrs(evt), "openclaw.errorKind": evt.errorKind };
+        voiceErrorCounter.add(1, attrs);
+        if (!tracesEnabled) {
+          return;
+        }
+        const span = tracer.startSpan("openclaw.voice.error", { attributes: attrs });
+        span.setStatus({ code: SpanStatusCode.ERROR, message: evt.message });
+        span.end();
+      };
+
       unsubscribe = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
         try {
           switch (evt.type) {
@@ -647,6 +830,30 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
+              return;
+            case "voice.join":
+              recordVoiceJoin(evt);
+              return;
+            case "voice.leave":
+              recordVoiceLeave(evt);
+              return;
+            case "voice.capture":
+              recordVoiceCapture(evt);
+              return;
+            case "voice.transcribe":
+              recordVoiceTranscribe(evt);
+              return;
+            case "voice.segment":
+              recordVoiceSegment(evt);
+              return;
+            case "voice.tts":
+              recordVoiceTts(evt);
+              return;
+            case "voice.playback":
+              recordVoicePlayback(evt);
+              return;
+            case "voice.error":
+              recordVoiceError(evt);
               return;
           }
         } catch (err) {

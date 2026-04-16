@@ -134,6 +134,17 @@ export type DiscordVoiceConfig = {
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /**
+   * Silence window (ms) before a speaker's audio is finalized and sent for transcription.
+   * Lower values reduce perceived latency; higher values avoid splitting mid-sentence pauses.
+   * Default: 400.
+   */
+  silenceGraceMs?: number;
+  /**
+   * Minimum captured audio duration (seconds) to process. Segments shorter than this are
+   * dropped as noise. Default: 0.35.
+   */
+  minSegmentSeconds?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
