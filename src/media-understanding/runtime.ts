@@ -8,12 +8,14 @@ import {
   normalizeMediaAttachments,
   runCapability,
 } from "./runner.js";
+import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import type {
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
   DescribeVideoFileParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
+  TranscribeAudioBufferParams,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 export type {
@@ -22,6 +24,7 @@ export type {
   DescribeVideoFileParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
+  TranscribeAudioBufferParams,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
 
@@ -161,4 +164,23 @@ export async function transcribeAudioFile(
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return { text: result.text };
+}
+
+export async function transcribeAudioBuffer(
+  params: TranscribeAudioBufferParams,
+): Promise<{ text: string | undefined }> {
+  const extension = path.extname(params.fileName) || ".wav";
+  const tmpPath = buildRandomTempFilePath({
+    prefix: "openclaw-voice-buf",
+    extension,
+  });
+  try {
+    await fs.writeFile(tmpPath, params.buffer);
+    return await transcribeAudioFile({
+      ...params,
+      filePath: tmpPath,
+    });
+  } finally {
+    await fs.rm(tmpPath, { force: true }).catch(() => {});
+  }
 }

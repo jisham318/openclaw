@@ -137,7 +137,7 @@ export type DiscordVoiceConfig = {
   /**
    * Silence window (ms) before a speaker's audio is finalized and sent for transcription.
    * Lower values reduce perceived latency; higher values avoid splitting mid-sentence pauses.
-   * Default: 400.
+   * Default: 250.
    */
   silenceGraceMs?: number;
   /**

@@ -231,6 +231,28 @@ export type DiagnosticVoiceErrorEvent = DiagnosticBaseEvent & {
   isRecoverable: boolean;
 };
 
+export type DiagnosticVoiceDecodeEvent = DiagnosticBaseEvent & {
+  type: "voice.decode";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  userId: string;
+  durationMs: number;
+  pcmBytes: number;
+  opusFrames: number;
+  outcome: "ok" | "empty" | "error";
+};
+
+export type DiagnosticVoiceWavWriteEvent = DiagnosticBaseEvent & {
+  type: "voice.wav_write";
+  channel: "discord";
+  guildId: string;
+  channelId: string;
+  durationMs: number;
+  pcmBytes: number;
+  outcome: "ok" | "skipped" | "error";
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -252,7 +274,9 @@ export type DiagnosticEventPayload =
   | DiagnosticVoiceSegmentEvent
   | DiagnosticVoiceTtsEvent
   | DiagnosticVoicePlaybackEvent
-  | DiagnosticVoiceErrorEvent;
+  | DiagnosticVoiceErrorEvent
+  | DiagnosticVoiceDecodeEvent
+  | DiagnosticVoiceWavWriteEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

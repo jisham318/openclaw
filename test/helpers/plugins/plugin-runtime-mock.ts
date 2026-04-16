@@ -165,6 +165,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeVideoFile"],
       transcribeAudioFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["transcribeAudioFile"],
+      transcribeAudioBuffer:
+        vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["transcribeAudioBuffer"],
     },
     imageGeneration: {
       generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],

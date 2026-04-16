@@ -153,6 +153,44 @@ describe("voice profiling", () => {
     }
   });
 
+  it("emits voice.decode with pcm details", () => {
+    const profiler = createVoiceProfiler({ guildId: "g1", channelId: "c1" });
+    const start = profiler.startTimer();
+    profiler.emitDecode({
+      userId: "u1",
+      startMs: start,
+      pcmBytes: 96000,
+      opusFrames: 250,
+      outcome: "ok",
+    });
+
+    expect(events).toHaveLength(1);
+    if (events[0].type === "voice.decode") {
+      expect(events[0].userId).toBe("u1");
+      expect(events[0].pcmBytes).toBe(96000);
+      expect(events[0].opusFrames).toBe(250);
+      expect(events[0].outcome).toBe("ok");
+      expect(events[0].durationMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("emits voice.wav_write with pcm size", () => {
+    const profiler = createVoiceProfiler({ guildId: "g1", channelId: "c1" });
+    const start = profiler.startTimer();
+    profiler.emitWavWrite({
+      startMs: start,
+      pcmBytes: 96000,
+      outcome: "ok",
+    });
+
+    expect(events).toHaveLength(1);
+    if (events[0].type === "voice.wav_write") {
+      expect(events[0].pcmBytes).toBe(96000);
+      expect(events[0].outcome).toBe("ok");
+      expect(events[0].durationMs).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   it("includes monotonic seq and ts on all events", () => {
     const profiler = createVoiceProfiler({ guildId: "g1", channelId: "c1" });
     profiler.emitLeave();

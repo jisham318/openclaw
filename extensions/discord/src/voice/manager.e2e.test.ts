@@ -246,7 +246,7 @@ describe("DiscordVoiceManager", () => {
   type ProcessSegmentInvoker = {
     processSegment: (params: {
       entry: unknown;
-      wavPath: string;
+      wavBuffer: Buffer;
       userId: string;
       durationSeconds: number;
     }) => Promise<void>;
@@ -264,11 +264,11 @@ describe("DiscordVoiceManager", () => {
         connection: createConnectionMock(),
         player: createAudioPlayerMock(),
         playbackQueue: Promise.resolve(),
-        processingQueue: Promise.resolve(),
+        processingQueues: new Map(),
         capture: createVoiceCaptureState(),
         receiveRecovery: createVoiceReceiveRecoveryState(),
       },
-      wavPath: "/tmp/test.wav",
+      wavBuffer: Buffer.from("RIFF"),
       userId,
       durationSeconds: 1.2,
     });

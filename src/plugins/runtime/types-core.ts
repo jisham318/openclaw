@@ -103,6 +103,7 @@ export type PluginRuntimeCore = {
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
     describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
     transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
+    transcribeAudioBuffer: MediaUnderstandingRuntime["transcribeAudioBuffer"];
   };
   imageGeneration: {
     generate: (

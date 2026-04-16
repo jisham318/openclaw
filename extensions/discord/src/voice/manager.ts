@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Readable } from "node:stream";
 import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
@@ -56,7 +55,7 @@ const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 const BIT_DEPTH = 16;
 const DEFAULT_MIN_SEGMENT_SECONDS = 0.35;
-const DEFAULT_CAPTURE_FINALIZE_GRACE_MS = 400;
+const DEFAULT_CAPTURE_FINALIZE_GRACE_MS = 250;
 const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
 const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
@@ -85,7 +84,7 @@ type VoiceSessionEntry = {
   connection: import("@discordjs/voice").VoiceConnection;
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
-  processingQueue: Promise<void>;
+  processingQueues: Map<string, Promise<void>>;
   capture: VoiceCaptureState;
   receiveRecovery: VoiceReceiveRecoveryState;
   profiler: VoiceProfiler;
@@ -147,21 +146,22 @@ function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConf
 function buildWavBuffer(pcm: Buffer): Buffer {
   const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
   const byteRate = SAMPLE_RATE * blockAlign;
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
-  header.write("WAVE", 8);
-  header.write("fmt ", 12);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(CHANNELS, 22);
-  header.writeUInt32LE(SAMPLE_RATE, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(blockAlign, 32);
-  header.writeUInt16LE(BIT_DEPTH, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(pcm.length, 40);
-  return Buffer.concat([header, pcm]);
+  const buf = Buffer.allocUnsafe(44 + pcm.length);
+  buf.write("RIFF", 0);
+  buf.writeUInt32LE(36 + pcm.length, 4);
+  buf.write("WAVE", 8);
+  buf.write("fmt ", 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(CHANNELS, 22);
+  buf.writeUInt32LE(SAMPLE_RATE, 24);
+  buf.writeUInt32LE(byteRate, 28);
+  buf.writeUInt16LE(blockAlign, 32);
+  buf.writeUInt16LE(BIT_DEPTH, 34);
+  buf.write("data", 36);
+  buf.writeUInt32LE(pcm.length, 40);
+  pcm.copy(buf, 44);
+  return buf;
 }
 
 type OpusDecoder = {
@@ -223,13 +223,8 @@ function resolveOpusDecoderFactory(): OpusDecoderFactory | null {
   return null;
 }
 
-function createOpusDecoder(): { decoder: OpusDecoder; name: string } | null {
-  const factory = getOrCreateOpusDecoderFactory();
-  if (!factory) {
-    return null;
-  }
-  return { decoder: factory.load(), name: factory.name };
-}
+const DECODER_POOL_MAX = 4;
+const decoderPool: OpusDecoder[] = [];
 
 function getOrCreateOpusDecoderFactory(): OpusDecoderFactory | null {
   if (cachedOpusDecoderFactory !== "unresolved") {
@@ -239,29 +234,22 @@ function getOrCreateOpusDecoderFactory(): OpusDecoderFactory | null {
   return cachedOpusDecoderFactory;
 }
 
-async function decodeOpusStream(stream: Readable): Promise<Buffer> {
-  const selected = createOpusDecoder();
-  if (!selected) {
-    return Buffer.alloc(0);
+function acquireDecoder(): { decoder: OpusDecoder; name: string } | null {
+  const factory = getOrCreateOpusDecoderFactory();
+  if (!factory) {
+    return null;
   }
-  logVoiceVerbose(`opus decoder: ${selected.name}`);
-  const chunks: Buffer[] = [];
-  try {
-    for await (const chunk of stream) {
-      if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
-        continue;
-      }
-      const decoded = selected.decoder.decode(chunk);
-      if (decoded && decoded.length > 0) {
-        chunks.push(Buffer.from(decoded));
-      }
-    }
-  } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
-    }
+  const pooled = decoderPool.pop();
+  if (pooled) {
+    return { decoder: pooled, name: factory.name };
   }
-  return chunks.length > 0 ? Buffer.concat(chunks) : Buffer.alloc(0);
+  return { decoder: factory.load(), name: factory.name };
+}
+
+function releaseDecoder(decoder: OpusDecoder): void {
+  if (decoderPool.length < DECODER_POOL_MAX) {
+    decoderPool.push(decoder);
+  }
 }
 
 function estimateDurationSeconds(pcm: Buffer): number {
@@ -272,38 +260,38 @@ function estimateDurationSeconds(pcm: Buffer): number {
   return pcm.length / (bytesPerSample * SAMPLE_RATE);
 }
 
-async function writeWavFile(pcm: Buffer): Promise<{ path: string; durationSeconds: number }> {
-  const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "discord-voice-"));
-  const filePath = path.join(tempDir, `segment-${randomUUID()}.wav`);
-  const wav = buildWavBuffer(pcm);
-  await fs.writeFile(filePath, wav);
-  scheduleTempCleanup(tempDir);
-  return { path: filePath, durationSeconds: estimateDurationSeconds(pcm) };
-}
-
-function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
-  const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err) => {
-      if (shouldLogVerbose()) {
-        logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
-      }
-    });
-  }, delayMs);
-  timer.unref();
-}
-
 async function transcribeAudio(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  filePath: string;
+  wavBuffer: Buffer;
 }): Promise<string | undefined> {
-  const result = await getDiscordRuntime().mediaUnderstanding.transcribeAudioFile({
-    filePath: params.filePath,
-    cfg: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
-    mime: "audio/wav",
-  });
-  return normalizeOptionalString(result.text);
+  const runtime = getDiscordRuntime();
+  if (runtime.mediaUnderstanding.transcribeAudioBuffer) {
+    const result = await runtime.mediaUnderstanding.transcribeAudioBuffer({
+      buffer: params.wavBuffer,
+      fileName: "segment.wav",
+      cfg: params.cfg,
+      agentDir: resolveAgentDir(params.cfg, params.agentId),
+      mime: "audio/wav",
+    });
+    return normalizeOptionalString(result.text);
+  }
+  const tempDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "discord-voice-fallback-"),
+  );
+  const filePath = path.join(tempDir, `segment-${randomUUID()}.wav`);
+  try {
+    await fs.writeFile(filePath, params.wavBuffer);
+    const result = await runtime.mediaUnderstanding.transcribeAudioFile({
+      filePath,
+      cfg: params.cfg,
+      agentDir: resolveAgentDir(params.cfg, params.agentId),
+      mime: "audio/wav",
+    });
+    return normalizeOptionalString(result.text);
+  } finally {
+    fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export class DiscordVoiceManager {
@@ -532,7 +520,7 @@ export class DiscordVoiceManager {
       connection,
       player,
       playbackQueue: Promise.resolve(),
-      processingQueue: Promise.resolve(),
+      processingQueues: new Map(),
       capture: createVoiceCaptureState(),
       receiveRecovery: createVoiceReceiveRecoveryState(),
       profiler: joinProfiler,
@@ -635,10 +623,16 @@ export class DiscordVoiceManager {
     this.sessions.clear();
   }
 
-  private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {
-    entry.processingQueue = entry.processingQueue
+  private enqueueProcessing(
+    entry: VoiceSessionEntry,
+    userId: string,
+    task: () => Promise<void>,
+  ) {
+    const prev = entry.processingQueues.get(userId) ?? Promise.resolve();
+    const next = prev
       .then(task)
       .catch((err) => logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`));
+    entry.processingQueues.set(userId, next);
   }
 
   private enqueuePlayback(entry: VoiceSessionEntry, task: () => Promise<void>) {
@@ -708,8 +702,58 @@ export class DiscordVoiceManager {
       this.handleReceiveError(entry, err);
     });
 
+    const selected = acquireDecoder();
+    const pcmChunks: Buffer[] = [];
+    let totalPcmBytes = 0;
+    let opusFrameCount = 0;
+    let decodeError = false;
+    const decodeStart = entry.profiler.startTimer();
+
+    if (selected) {
+      logVoiceVerbose(`opus decoder: ${selected.name}`);
+      stream.on("data", (chunk: Buffer) => {
+        if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
+          return;
+        }
+        opusFrameCount++;
+        try {
+          const decoded = selected.decoder.decode(chunk);
+          if (decoded && decoded.length > 0) {
+            pcmChunks.push(Buffer.from(decoded));
+            totalPcmBytes += decoded.length;
+          }
+        } catch (err) {
+          if (!decodeError) {
+            decodeError = true;
+            if (shouldLogVerbose()) {
+              logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
+            }
+          }
+        }
+      });
+    }
+
     try {
-      const pcm = await decodeOpusStream(stream);
+      await new Promise<void>((resolve) => {
+        stream.on("end", resolve);
+        stream.on("close", resolve);
+        stream.on("error", () => resolve());
+      });
+
+      if (selected) {
+        releaseDecoder(selected.decoder);
+      }
+
+      entry.profiler.emitDecode({
+        userId,
+        startMs: decodeStart,
+        pcmBytes: totalPcmBytes,
+        opusFrames: opusFrameCount,
+        outcome: totalPcmBytes === 0 ? "empty" : decodeError ? "error" : "ok",
+      });
+
+      const pcm = totalPcmBytes > 0 ? Buffer.concat(pcmChunks) : Buffer.alloc(0);
+
       if (pcm.length === 0) {
         logVoiceVerbose(
           `capture empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -723,7 +767,8 @@ export class DiscordVoiceManager {
         return;
       }
       this.resetDecryptFailureState(entry);
-      const { path: wavPath, durationSeconds } = await writeWavFile(pcm);
+
+      const durationSeconds = estimateDurationSeconds(pcm);
       const minimumDurationSeconds = streamAborted ? 0.2 : this.minSegmentSeconds;
       if (durationSeconds < minimumDurationSeconds) {
         logVoiceVerbose(
@@ -737,6 +782,15 @@ export class DiscordVoiceManager {
         });
         return;
       }
+
+      const wavBuildStart = entry.profiler.startTimer();
+      const wavBuffer = buildWavBuffer(pcm);
+      entry.profiler.emitWavWrite({
+        startMs: wavBuildStart,
+        pcmBytes: pcm.length,
+        outcome: "ok",
+      });
+
       logVoiceVerbose(
         `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
@@ -746,8 +800,8 @@ export class DiscordVoiceManager {
         audioDurationSeconds: durationSeconds,
         outcome: "ready",
       });
-      this.enqueueProcessing(entry, async () => {
-        await this.processSegment({ entry, wavPath, userId, durationSeconds });
+      this.enqueueProcessing(entry, userId, async () => {
+        await this.processSegment({ entry, wavBuffer, userId, durationSeconds });
       });
     } finally {
       finishVoiceCapture(entry.capture, userId, generation);
@@ -756,11 +810,11 @@ export class DiscordVoiceManager {
 
   private async processSegment(params: {
     entry: VoiceSessionEntry;
-    wavPath: string;
+    wavBuffer: Buffer;
     userId: string;
     durationSeconds: number;
   }) {
-    const { entry, wavPath, userId, durationSeconds } = params;
+    const { entry, wavBuffer, userId, durationSeconds } = params;
     const segmentStart = entry.profiler.startTimer();
     logVoiceVerbose(
       `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
@@ -806,7 +860,7 @@ export class DiscordVoiceManager {
     const transcript = await transcribeAudio({
       cfg: this.params.cfg,
       agentId: entry.route.agentId,
-      filePath: wavPath,
+      wavBuffer,
     });
     if (!transcript) {
       logVoiceVerbose(

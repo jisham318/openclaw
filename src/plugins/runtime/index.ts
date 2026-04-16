@@ -63,6 +63,9 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
+    transcribeAudioBuffer: bindMediaUnderstandingRuntime(
+      (runtime) => runtime.transcribeAudioBuffer,
+    ),
   };
 }
 

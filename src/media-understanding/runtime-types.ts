@@ -60,6 +60,17 @@ export type TranscribeAudioFileParams = {
   prompt?: string;
 };
 
+export type TranscribeAudioBufferParams = {
+  buffer: Buffer;
+  fileName: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  mime?: string;
+  activeModel?: ActiveMediaModel;
+  language?: string;
+  prompt?: string;
+};
+
 export type MediaUnderstandingRuntime = {
   runMediaUnderstandingFile: (
     params: RunMediaUnderstandingFileParams,
@@ -70,4 +81,7 @@ export type MediaUnderstandingRuntime = {
   ) => Promise<DescribeImageFileWithModelResult>;
   describeVideoFile: (params: DescribeVideoFileParams) => Promise<RunMediaUnderstandingFileResult>;
   transcribeAudioFile: (params: TranscribeAudioFileParams) => Promise<{ text: string | undefined }>;
+  transcribeAudioBuffer: (
+    params: TranscribeAudioBufferParams,
+  ) => Promise<{ text: string | undefined }>;
 };

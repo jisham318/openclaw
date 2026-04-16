@@ -135,6 +135,42 @@ export function createVoiceProfiler(ctx: VoiceProfileContext) {
         isRecoverable: params.isRecoverable,
       });
     },
+
+    emitDecode(params: {
+      userId: string;
+      startMs: number;
+      pcmBytes: number;
+      opusFrames: number;
+      outcome: "ok" | "empty" | "error";
+    }) {
+      emitDiagnosticEvent({
+        type: "voice.decode",
+        channel: "discord",
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        userId: params.userId,
+        durationMs: elapsed(params.startMs),
+        pcmBytes: params.pcmBytes,
+        opusFrames: params.opusFrames,
+        outcome: params.outcome,
+      });
+    },
+
+    emitWavWrite(params: {
+      startMs: number;
+      pcmBytes: number;
+      outcome: "ok" | "skipped" | "error";
+    }) {
+      emitDiagnosticEvent({
+        type: "voice.wav_write",
+        channel: "discord",
+        guildId: ctx.guildId,
+        channelId: ctx.channelId,
+        durationMs: elapsed(params.startMs),
+        pcmBytes: params.pcmBytes,
+        outcome: params.outcome,
+      });
+    },
   };
 }
 
