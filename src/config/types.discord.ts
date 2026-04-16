@@ -137,12 +137,12 @@ export type DiscordVoiceConfig = {
   /**
    * Silence window (ms) before a speaker's audio is finalized and sent for transcription.
    * Lower values reduce perceived latency; higher values avoid splitting mid-sentence pauses.
-   * Default: 250.
+   * Default: 1000.
    */
   silenceGraceMs?: number;
   /**
    * Minimum captured audio duration (seconds) to process. Segments shorter than this are
-   * dropped as noise. Default: 0.35.
+   * dropped as noise. Default: 0.5.
    */
   minSegmentSeconds?: number;
   /**
@@ -150,7 +150,7 @@ export type DiscordVoiceConfig = {
    * without a silence gap, the capture is force-cut, the accumulated audio is sent for
    * transcription, and a new capture is started immediately so no audio is lost.
    * Prevents runaway captures from producing multi-second latency spikes.
-   * Default: 3000.
+   * Default: 5000.
    */
   maxSegmentDurationMs?: number;
   /** Optional TTS overrides for Discord voice output. */
