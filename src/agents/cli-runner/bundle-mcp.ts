@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeConfiguredMcpServers } from "../../config/mcp-config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -87,6 +88,60 @@ function injectClaudeMcpConfigArgs(args: string[] | undefined, mcpConfigPath: st
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Translate an OpenClaw-shaped MCP server config (from `mcp.servers` in
+ * openclaw.json) into the CLI-bundle shape expected downstream. The main
+ * differences are that OpenClaw uses `transport: "streamable-http" | "sse"`
+ * while CLI client configs (Claude Code `.mcp.json`, Gemini system settings)
+ * expect `type: "http" | "sse"`. Stdio entries pass through unchanged.
+ *
+ * Header values are also coerced to strings because OpenClaw's schema accepts
+ * `string | number | boolean` but CLI clients require strings.
+ */
+function translateConfiguredMcpServerForBundle(
+  server: Record<string, unknown>,
+): BundleMcpServerConfig {
+  const next: Record<string, unknown> = { ...server };
+  const headers = next.headers;
+  if (isRecord(headers)) {
+    const coerced: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (typeof value === "string") {
+        coerced[key] = value;
+      } else if (typeof value === "number" || typeof value === "boolean") {
+        coerced[key] = String(value);
+      }
+    }
+    next.headers = coerced;
+  }
+  if (typeof next.url === "string" && typeof next.type !== "string") {
+    const transport = next.transport;
+    if (transport === "streamable-http") {
+      next.type = "http";
+    } else if (transport === "sse") {
+      next.type = "sse";
+    }
+  }
+  delete next.transport;
+  // `connectionTimeoutMs` is an OpenClaw-side knob for the embedded client and
+  // is not meaningful inside a downstream CLI MCP config; strip it so we don't
+  // leak unknown fields into third-party CLIs.
+  delete next.connectionTimeoutMs;
+  return next as BundleMcpServerConfig;
+}
+
+function buildConfiguredBundleMcpConfig(cfg: OpenClawConfig | undefined): BundleMcpConfig {
+  const configured = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
+  if (Object.keys(configured).length === 0) {
+    return { mcpServers: {} };
+  }
+  const mcpServers: Record<string, BundleMcpServerConfig> = {};
+  for (const [name, server] of Object.entries(configured)) {
+    mcpServers[name] = translateConfiguredMcpServerForBundle(server);
+  }
+  return { mcpServers };
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
@@ -348,6 +403,21 @@ export async function prepareCliBundleMcpConfig(params: {
     params.warn?.(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   mergedConfig = applyMergePatch(mergedConfig, bundleConfig.config) as BundleMcpConfig;
+
+  // User-owned `mcp.servers` entries from openclaw.json override bundle/plugin
+  // defaults per server name, matching the embedded-pi runtime semantics. We
+  // replace per server rather than deep-merging so switching transport shapes
+  // (e.g. stdio → http) does not leave stale fields behind.
+  const configuredBundle = buildConfiguredBundleMcpConfig(params.config);
+  if (Object.keys(configuredBundle.mcpServers).length > 0) {
+    mergedConfig = {
+      mcpServers: {
+        ...mergedConfig.mcpServers,
+        ...configuredBundle.mcpServers,
+      },
+    };
+  }
+
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }

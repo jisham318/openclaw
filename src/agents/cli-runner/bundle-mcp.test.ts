@@ -314,4 +314,251 @@ describe("prepareCliBundleMcpConfig", () => {
 
     await prepared.cleanup?.();
   });
+
+  it("merges configured mcp.servers entries into the Claude mcp-config overlay", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-configured-");
+
+    const config: OpenClawConfig = {
+      mcp: {
+        servers: {
+          "home-assistant": {
+            url: "http://192.168.0.4:8123/api/mcp",
+            transport: "streamable-http",
+            headers: {
+              Authorization: "Bearer ha-token-xyz",
+            },
+            connectionTimeoutMs: 15_000,
+          },
+        },
+      },
+    };
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs"],
+      },
+      workspaceDir,
+      config,
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<
+        string,
+        {
+          type?: string;
+          url?: string;
+          headers?: Record<string, string>;
+          transport?: string;
+          connectionTimeoutMs?: number;
+        }
+      >;
+    };
+    expect(raw.mcpServers?.["home-assistant"]).toEqual({
+      type: "http",
+      url: "http://192.168.0.4:8123/api/mcp",
+      headers: { Authorization: "Bearer ha-token-xyz" },
+    });
+    expect(raw.mcpServers?.["home-assistant"]?.transport).toBeUndefined();
+    expect(raw.mcpServers?.["home-assistant"]?.connectionTimeoutMs).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
+  it("lets configured mcp.servers override a same-named plugin bundle entry", async () => {
+    const env = captureEnv(["HOME"]);
+    try {
+      const homeDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-override-home-");
+      const workspaceDir = await tempHarness.createTempDir(
+        "openclaw-cli-bundle-mcp-override-workspace-",
+      );
+      process.env.HOME = homeDir;
+
+      await createBundleProbePlugin(homeDir);
+
+      const config: OpenClawConfig = {
+        plugins: {
+          entries: {
+            "bundle-probe": { enabled: true },
+          },
+        },
+        mcp: {
+          servers: {
+            bundleProbe: {
+              url: "https://user-override.example.com/mcp",
+              transport: "streamable-http",
+              headers: { Authorization: "Bearer user-token" },
+            },
+          },
+        },
+      };
+
+      const prepared = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: {
+          command: "node",
+          args: ["./fake-claude.mjs"],
+        },
+        workspaceDir,
+        config,
+      });
+
+      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+        mcpServers?: Record<
+          string,
+          { type?: string; url?: string; command?: string; args?: string[] }
+        >;
+      };
+      expect(raw.mcpServers?.bundleProbe).toEqual({
+        type: "http",
+        url: "https://user-override.example.com/mcp",
+        headers: { Authorization: "Bearer user-token" },
+      });
+      // User override fully replaced the stdio bundle entry: no stale `command`/`args`.
+      expect(raw.mcpServers?.bundleProbe?.command).toBeUndefined();
+      expect(raw.mcpServers?.bundleProbe?.args).toBeUndefined();
+
+      await prepared.cleanup?.();
+    } finally {
+      env.restore();
+    }
+  });
+
+  it("maps configured mcp.servers streamable-http entries into Gemini system settings", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-gemini-configured-",
+    );
+
+    const config: OpenClawConfig = {
+      mcp: {
+        servers: {
+          "home-assistant": {
+            url: "http://192.168.0.4:8123/api/mcp",
+            transport: "streamable-http",
+            headers: {
+              Authorization: "Bearer ha-token-xyz",
+            },
+          },
+        },
+      },
+    };
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "gemini-system-settings",
+      backend: {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+      },
+      workspaceDir,
+      config,
+    });
+
+    expect(typeof prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe("string");
+    const raw = JSON.parse(
+      await fs.readFile(prepared.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH as string, "utf-8"),
+    ) as {
+      mcp?: { allowed?: string[] };
+      mcpServers?: Record<
+        string,
+        { type?: string; url?: string; headers?: Record<string, string> }
+      >;
+    };
+    expect(raw.mcp?.allowed).toEqual(["home-assistant"]);
+    expect(raw.mcpServers?.["home-assistant"]?.type).toBe("http");
+    expect(raw.mcpServers?.["home-assistant"]?.url).toBe("http://192.168.0.4:8123/api/mcp");
+    expect(raw.mcpServers?.["home-assistant"]?.headers?.Authorization).toBe("Bearer ha-token-xyz");
+
+    await prepared.cleanup?.();
+  });
+
+  it("maps configured mcp.servers streamable-http entries into Codex config overrides", async () => {
+    const workspaceDir = await tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-codex-configured-",
+    );
+
+    const config: OpenClawConfig = {
+      mcp: {
+        servers: {
+          homeAssistant: {
+            url: "http://192.168.0.4:8123/api/mcp",
+            transport: "streamable-http",
+            headers: {
+              Authorization: "Bearer ha-token-xyz",
+            },
+          },
+        },
+      },
+    };
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "codex-config-overrides",
+      backend: {
+        command: "codex",
+        args: ["exec", "--json"],
+      },
+      workspaceDir,
+      config,
+    });
+
+    expect(prepared.backend.args).toEqual([
+      "exec",
+      "--json",
+      "-c",
+      'mcp_servers={ homeAssistant = { url = "http://192.168.0.4:8123/api/mcp", http_headers = { Authorization = "Bearer ha-token-xyz" } } }',
+    ]);
+
+    await prepared.cleanup?.();
+  });
+
+  it("drops non-string header entries from configured mcp.servers", async () => {
+    const workspaceDir = await tempHarness.createTempDir("openclaw-cli-bundle-mcp-header-coerce-");
+
+    const config: OpenClawConfig = {
+      mcp: {
+        servers: {
+          "home-assistant": {
+            url: "http://192.168.0.4:8123/api/mcp",
+            transport: "streamable-http",
+            headers: {
+              Authorization: "Bearer ha-token-xyz",
+              "X-Count": 42,
+              // Invalid nested object headers (e.g. accidental SecretRef shapes)
+              // should be silently dropped rather than propagated.
+              "X-Bogus": { ref: "secret" } as unknown as string,
+            },
+          },
+        },
+      },
+    };
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: { command: "node", args: ["./fake-claude.mjs"] },
+      workspaceDir,
+      config,
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(raw.mcpServers?.["home-assistant"]?.headers).toEqual({
+      Authorization: "Bearer ha-token-xyz",
+      "X-Count": "42",
+    });
+
+    await prepared.cleanup?.();
+  });
 });
